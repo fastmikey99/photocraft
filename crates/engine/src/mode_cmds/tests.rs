@@ -504,3 +504,32 @@ fn color_table_rejects_an_invalid_transparent_index_without_editing() {
     s.execute("image.mode.colorTable", json!({"transparent": 0})).unwrap();
     assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, Some(0));
 }
+
+#[test]
+fn bitmap_lattice_at_all_depths_and_invalid_parameters() {
+    for depth in [8, 16, 32] {
+        let mut s = session(40, 40, depth, "grayscale");
+        // Use opaque pixels, including the black endpoint.
+        paint(&mut s, |x, _| {
+            let g = if x < 20 { 0.0 } else { 1.0 };
+            [g, g, g, 1.0]
+        });
+        s.execute("image.mode.bitmap", json!({"method":"halftoneLattice", "latticeX":18,"latticeY":8,"originX":3,"originY":-6})).unwrap();
+        let surface = doc(&s).layers[0].surface().unwrap();
+        assert_eq!(surface.rgba(4, 4)[0], 0.0);
+        assert_eq!(surface.rgba(24, 4)[0], 1.0);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(doc(&s).mode, ColorMode::Grayscale);
+        let history_len = s.active().unwrap().history.past_len();
+        for params in [
+            json!({"method":"halftoneLattice","latticeX":0,"latticeY":0}),
+            json!({"method":"halftoneLattice","latticeX":257}),
+            json!({"method":"halftoneLattice","originX":0.5}),
+            json!({"method":"halftoneLattice","latticeY":"bad"}),
+        ] {
+            assert!(s.execute("image.mode.bitmap", params).is_err());
+            assert_eq!(doc(&s).mode, ColorMode::Grayscale);
+            assert_eq!(s.active().unwrap().history.past_len(), history_len);
+        }
+    }
+}

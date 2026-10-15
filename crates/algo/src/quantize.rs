@@ -8,6 +8,7 @@
 use photocraft_color::convert::srgb_to_lab;
 use serde::{Deserialize, Serialize};
 
+pub mod lattice;
 mod nearest;
 use nearest::Nearest;
 

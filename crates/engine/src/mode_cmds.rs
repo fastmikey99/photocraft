@@ -391,7 +391,26 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
 fn bitmap(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "image.mode.bitmap";
     let dpi = s.active().ok_or(EngineError::NoDocument)?.doc.resolution_dpi.max(1.0);
+    let lattice = if str_or(p, "method", "diffusion") == "halftoneLattice" {
+        let integer = |key: &str, default: f64| -> Result<i32> {
+            let value = finite_num(p, CMD, key, default)?;
+            if value.fract() != 0.0 || !(-1_000_000.0..=1_000_000.0).contains(&value) {
+                return Err(bad(CMD, format!("{key} must be an integer in -1000000..1000000")));
+            }
+            Ok(value as i32)
+        };
+        Some(
+            quantize::lattice::LatticeScreen::new(
+                [integer("latticeX", 18.0)?, integer("latticeY", 8.0)?],
+                [integer("originX", 0.0)?, integer("originY", 0.0)?],
+            )
+            .map_err(|message| bad(CMD, message))?,
+        )
+    } else {
+        None
+    };
     let method = match str_or(p, "method", "diffusion") {
+        "halftoneLattice" => BitmapMethod::Threshold,
         "threshold" | "threshold50" => BitmapMethod::Threshold,
         "pattern" => BitmapMethod::Pattern,
         "diffusion" => BitmapMethod::Diffusion,
@@ -406,13 +425,17 @@ fn bitmap(s: &mut Session, p: &Value) -> Result<Value> {
             BitmapMethod::Halftone { cell: (dpi / freq).max(2.0), angle: angle as f32, shape }
         }
         m => {
-            return Err(bad(CMD, format!("method `{m}` (threshold|pattern|diffusion|halftone)")));
+            return Err(bad(CMD, format!("method `{m}` (threshold|pattern|diffusion|halftone|halftoneLattice)")));
         }
     };
     s.edit("Bitmap", |doc, active| {
         let px = composite(doc, true);
         let mut gray: Vec<f32> = px.iter().map(|q| photocraft_color::convert::rgb_to_gray([q[0], q[1], q[2]])).collect();
-        quantize::to_bitmap(&mut gray, doc.size.width as usize, method);
+        if let Some(screen) = &lattice {
+            screen.apply(&mut gray, doc.size.width as usize);
+        } else {
+            quantize::to_bitmap(&mut gray, doc.size.width as usize, method);
+        }
         let out: Vec<[f32; 4]> = gray.iter().map(|g| [*g, *g, *g, 1.0]).collect();
         single_layer(doc, active, ColorMode::Bitmap, &out, "Background", true);
         Ok(())
@@ -523,7 +546,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.mode.bitmap",
             "Bitmap…",
             ["Image", "Mode"],
-            r##"{"method":"diffusion|threshold|pattern|halftone"="diffusion","frequency":1..999=53,"angle":-180..180=45,"shape":"round|ellipse|line|square|diamond|cross"="round"} (halftone frequency in lines/inch; flattens)"##,
+            r##"{"method":"diffusion|threshold|pattern|halftone|halftoneLattice"="diffusion","frequency":1..999=53,"angle":-180..180=45,"shape":"round|ellipse|line|square|diamond|cross"="round"} (halftone frequency in lines/inch; halftoneLattice uses integer latticeX/latticeY, squared length 4..65536, and integer originX/originY pixel indices for a prototype ranked round screen; flattens)"##,
             |s| mode_is(s, &[ColorMode::Grayscale], "Bitmap needs a Grayscale image (Image › Mode › Grayscale first)"),
             bitmap
         ),
